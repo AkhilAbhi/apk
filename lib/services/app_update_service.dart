@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
-import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:open_filex/open_filex.dart';
@@ -163,29 +162,6 @@ class AppUpdateService {
         }
       } catch (ghErr) {
         debugPrint('[APP_UPDATE] GitHub check note: $ghErr');
-      }
-
-      // 2. Secondary Provider: Firebase Storage fallback (if ever enabled)
-      if (parsedItems.isEmpty) {
-        try {
-          debugPrint('[APP_UPDATE] Checking Firebase Storage "updates/" folder...');
-          final storageRef = FirebaseStorage.instance.ref('updates');
-          final listResult = await storageRef.listAll().timeout(const Duration(seconds: 4));
-          for (final item in listResult.items) {
-            final parsed = parseUpdateFilename(item.name);
-            if (parsed != null) {
-              final dlUrl = await item.getDownloadURL();
-              parsedItems.add(
-                RemoteParsedItem(
-                  filename: item.name,
-                  downloadUrl: dlUrl,
-                  type: parsed.type,
-                  version: parsed.version,
-                ),
-              );
-            }
-          }
-        } catch (_) {}
       }
 
       if (parsedItems.isEmpty) {

@@ -1,17 +1,14 @@
-# ai_money_manager
+# AI Money Manager (APK Distribution)
 
-A new Flutter project.
+Automated releases and APK distribution for **AI Money Manager**.
 
-## Getting Started
+## Latest Release: v2.0.0
+- **Direct Download**: [money_manager_major_v2.0.0.apk](https://github.com/AkhilAbhi/apk/releases/download/v2.0.0/money_manager_major_v2.0.0.apk)
+- **Release Page**: [View Release Notes](https://github.com/AkhilAbhi/apk/releases/tag/v2.0.0)
 
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+### Features:
+- 🎙️ Malayalam Spoken Voice Entry with Instant English Categorization
+- 🐖 Animated Piggy Bank & Rupee Coin Drop Splash Screen
+- 🔄 Zero-Maintenance In-App Auto Updates (GitHub Releases)
+- 📊 Cascading Loan Tracking & Debt Management
+- 🗄️ Categorized Keyword Array Storage (Zero Database Bloat)

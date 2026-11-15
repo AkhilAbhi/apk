@@ -30,15 +30,15 @@ class AppUpdateInfo {
   bool get isMajor => type == UpdateType.major;
 }
 
-class StorageParsedItem {
-  final Reference ref;
+class RemoteParsedItem {
   final String filename;
+  final String downloadUrl;
   final UpdateType type;
   final String version;
 
-  const StorageParsedItem({
-    required this.ref,
+  const RemoteParsedItem({
     required this.filename,
+    required this.downloadUrl,
     required this.type,
     required this.version,
   });
@@ -47,6 +47,9 @@ class StorageParsedItem {
 class AppUpdateService {
   static final AppUpdateService instance = AppUpdateService._init();
   AppUpdateService._init();
+
+  static const String githubRepo = 'AkhilAbhi/apk';
+  static const String githubApiUrl = 'https://api.github.com/repos/AkhilAbhi/apk/releases';
 
   static const String _prefLastPromptTime = 'last_update_prompt_time';
   static const String _prefLastPromptVersion = 'last_prompted_version';
@@ -64,7 +67,7 @@ class AppUpdateService {
     caseSensitive: false,
   );
 
-  /// Parses a filename from Firebase Storage. Returns null if pattern does not match.
+  /// Parses a filename. Returns null if pattern does not match.
   static ({UpdateType type, String version})? parseUpdateFilename(String filename) {
     final match = filenameRegex.firstMatch(filename.trim());
     if (match == null) return null;
@@ -109,58 +112,103 @@ class AppUpdateService {
     return compareVersions(remote, current) > 0;
   }
 
-  /// Scans Firebase Storage `updates/` folder dynamically and determines if an update is available
+  /// Scans GitHub Releases and Firebase Storage dynamically to determine if an update is available
   Future<AppUpdateInfo?> checkForUpdate({BuildContext? context}) async {
     if (_isChecking) return updateInfoNotifier.value;
     _isChecking = true;
 
     try {
-      debugPrint('[STORAGE_UPDATE] Scanning Firebase Storage "updates/" folder...');
-      final storageRef = FirebaseStorage.instance.ref('updates');
-      final listResult = await storageRef.listAll().timeout(const Duration(seconds: 8));
+      final List<RemoteParsedItem> parsedItems = [];
 
-      final List<StorageParsedItem> parsedItems = [];
+      // 1. Primary Provider: GitHub Releases API
+      try {
+        debugPrint('[APP_UPDATE] Checking GitHub Releases ($githubRepo)...');
+        final dio = Dio();
+        final response = await dio.get<dynamic>(
+          githubApiUrl,
+          options: Options(
+            headers: {
+              'Accept': 'application/vnd.github.v3+json',
+              'User-Agent': 'FlutterAppUpdater',
+            },
+            sendTimeout: const Duration(seconds: 6),
+            receiveTimeout: const Duration(seconds: 6),
+          ),
+        );
 
-      for (final item in listResult.items) {
-        final parsed = parseUpdateFilename(item.name);
-        if (parsed != null) {
-          parsedItems.add(
-            StorageParsedItem(
-              ref: item,
-              filename: item.name,
-              type: parsed.type,
-              version: parsed.version,
-            ),
-          );
-          debugPrint('[STORAGE_UPDATE] Found valid update file: ${item.name} -> type=${parsed.type.name}, version=${parsed.version}');
-        } else {
-          debugPrint('[STORAGE_UPDATE] Ignoring non-matching file in updates/: ${item.name}');
+        if (response.statusCode == 200 && response.data is List) {
+          final List releases = response.data as List;
+          for (final rel in releases) {
+            if (rel is Map && rel['assets'] is List) {
+              for (final asset in rel['assets'] as List) {
+                if (asset is Map) {
+                  final name = asset['name']?.toString() ?? '';
+                  final downloadUrl = asset['browser_download_url']?.toString() ?? '';
+                  final parsed = parseUpdateFilename(name);
+                  if (parsed != null && downloadUrl.isNotEmpty) {
+                    parsedItems.add(
+                      RemoteParsedItem(
+                        filename: name,
+                        downloadUrl: downloadUrl,
+                        type: parsed.type,
+                        version: parsed.version,
+                      ),
+                    );
+                    debugPrint('[APP_UPDATE] GitHub Release asset: $name -> v${parsed.version} (${parsed.type.name})');
+                  }
+                }
+              }
+            }
+          }
         }
+      } catch (ghErr) {
+        debugPrint('[APP_UPDATE] GitHub check note: $ghErr');
+      }
+
+      // 2. Secondary Provider: Firebase Storage fallback (if ever enabled)
+      if (parsedItems.isEmpty) {
+        try {
+          debugPrint('[APP_UPDATE] Checking Firebase Storage "updates/" folder...');
+          final storageRef = FirebaseStorage.instance.ref('updates');
+          final listResult = await storageRef.listAll().timeout(const Duration(seconds: 4));
+          for (final item in listResult.items) {
+            final parsed = parseUpdateFilename(item.name);
+            if (parsed != null) {
+              final dlUrl = await item.getDownloadURL();
+              parsedItems.add(
+                RemoteParsedItem(
+                  filename: item.name,
+                  downloadUrl: dlUrl,
+                  type: parsed.type,
+                  version: parsed.version,
+                ),
+              );
+            }
+          }
+        } catch (_) {}
       }
 
       if (parsedItems.isEmpty) {
-        debugPrint('[STORAGE_UPDATE] No valid update APKs found in updates/');
+        debugPrint('[APP_UPDATE] No update APKs found.');
         updateInfoNotifier.value = null;
         _isChecking = false;
         return null;
       }
 
-      // Sort descending by semantic version so the highest version is first
+      // Sort descending by semantic version so highest version is first
       parsedItems.sort((a, b) => compareVersions(b.version, a.version));
       final highestItem = parsedItems.first;
 
       final packageInfo = await PackageInfo.fromPlatform();
       final currentVersion = packageInfo.version;
 
-      debugPrint('[STORAGE_UPDATE] Current App: v$currentVersion | Highest Remote: v${highestItem.version} (${highestItem.type.name.toUpperCase()})');
+      debugPrint('[APP_UPDATE] Current App: v$currentVersion | Highest Remote: v${highestItem.version} (${highestItem.type.name.toUpperCase()})');
 
       if (isNewerVersion(highestItem.version, currentVersion)) {
-        final downloadUrl = await highestItem.ref.getDownloadURL();
-
         final updateInfo = AppUpdateInfo(
           latestVersion: highestItem.version,
           currentVersion: currentVersion,
-          apkUrl: downloadUrl,
+          apkUrl: highestItem.downloadUrl,
           type: highestItem.type,
           filename: highestItem.filename,
         );
@@ -170,16 +218,16 @@ class AppUpdateService {
         if (context != null && context.mounted) {
           if (updateInfo.isMajor) {
             // Major update: ALWAYS prompt immediately (ignore cooldown)
-            debugPrint('[STORAGE_UPDATE] Major mandatory update detected. Displaying forced dialog.');
+            debugPrint('[APP_UPDATE] Major mandatory update detected. Displaying forced dialog.');
             showUpdateDialog(context, bypassCooldown: true);
           } else {
             // Minor update: Respect 24-hour cooldown
             final shouldPrompt = await _shouldPromptMinorDialog(highestItem.version);
             if (shouldPrompt && context.mounted) {
-              debugPrint('[STORAGE_UPDATE] Minor update detected. Prompting dialog.');
+              debugPrint('[APP_UPDATE] Minor update detected. Prompting dialog.');
               showUpdateDialog(context, bypassCooldown: false);
             } else {
-              debugPrint('[STORAGE_UPDATE] Minor update available, but 24-hr cooldown active. Visible in AppBar badge.');
+              debugPrint('[APP_UPDATE] Minor update available, but 24-hr cooldown active. Visible in AppBar badge.');
             }
           }
         }
@@ -187,11 +235,11 @@ class AppUpdateService {
         _isChecking = false;
         return updateInfo;
       } else {
-        debugPrint('[STORAGE_UPDATE] App is up to date (v$currentVersion)');
+        debugPrint('[APP_UPDATE] App is up to date (v$currentVersion)');
         updateInfoNotifier.value = null;
       }
     } catch (e) {
-      debugPrint('[STORAGE_UPDATE] Note: $e');
+      debugPrint('[APP_UPDATE] Error: $e');
     } finally {
       _isChecking = false;
     }
@@ -267,7 +315,7 @@ class _AppUpdateDialogState extends State<AppUpdateDialog> {
     setState(() {
       _isDownloading = true;
       _progress = 0.0;
-      _statusMessage = 'Connecting to Firebase Storage...';
+      _statusMessage = 'Connecting to download server...';
     });
 
     _cancelToken = CancelToken();
